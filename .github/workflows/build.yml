@@ -1,0 +1,37 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential binutils nasm clang make python3 python3-pil
+
+      - name: Build images
+        run: make -j"$(nproc)"
+
+      - name: Validate the ISO
+        run: make check-iso
+
+      - name: Upload bootable artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: reverticalos-images
+          path: |
+            build/revertical.iso
+            build/revertical.img
+          if-no-files-found: error

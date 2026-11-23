@@ -1,0 +1,36 @@
+# Build outputs
+/build/
+*.o
+*.elf
+*.map
+*.iso
+*.img
+*.efi
+*.rvx
+*.lib
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# Logs, VM images and local test state
+*.log
+VBox.log*
+*.vdi
+*.vmdk
+*.qcow2
+*.nvram
+
+# Local settings
+.env
+*.local

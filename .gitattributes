@@ -1,0 +1,17 @@
+# Normalize text files to LF in the repository.
+* text=auto eol=lf
+
+*.asm text
+*.c text
+*.h text
+*.py text
+*.md text
+Makefile text
+
+*.ttf binary
+*.jpeg binary
+*.jpg binary
+*.png binary
+*.iso binary
+*.img binary
+*.efi binary
