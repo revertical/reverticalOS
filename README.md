@@ -479,18 +479,34 @@ allocations.
 
 ## Input: PS/2, touchpads and USB HID
 
-The PS/2 controller is polled through the shared i8042 output buffer. During
-`mouse_init()` the kernel probes for advanced touchpads:
+The PS/2 controller is polled through the shared i8042 output buffer. Laptop
+firmware often leaves the pad in a vendor-specific state, so initialisation is
+deliberately conservative:
 
-- **Synaptics**: four `SETRES 0x00` commands followed by `GETINFO`; a pad
-  answers with `0x47` in the second ID byte. The driver then sends the sliced
-  `E6/E8` sequence for mode `0x40`, which is relative mode at the high report
-  rate, so the pad behaves like a normal mouse without absolute jumps.
-- **Elan**: the `F6 F5 E6 E6 E6 E9` magic knock; a pad answers `3C 03 C8` (or
-  `3C 03 00`). The driver leaves it in its mouse-compatible relative mode.
+- A full device reset (`0xFF`, self-test `0xAA`, ID, then a settle delay) runs
+  before anything else. "Set defaults" (`0xF6`) is *not* enough: a pad left in
+  4- or 6-byte mode keeps sending that format, and every 3-byte packet is then
+  misread or dropped. This is what made a real Dell Latitude E7250 touchpad
+  dead while emulated PS/2 mice worked.
+- Every command waits for an actual `0xFA` ACK, honours `0xFE` (resend) and
+  uses timeouts, so a slow, absent or confused device cannot silently
+  desynchronise the byte stream.
+- The controller config enables the auxiliary and keyboard clocks and keeps the
+  auxiliary IRQ off, because the driver polls the output buffer.
+- **Synaptics** (four `SETRES 0x00` commands, then `GETINFO` -> `0x47`) and
+  **Elan** (`F5`, three `E6`, `GETINFO` -> `3C 03 C8`) probes are for
+  identification only. Each probe is followed by another reset, and a Synaptics
+  pad is explicitly put back into mode 0 (relative reporting, 3-byte packets).
+  No vendor mode survives into normal operation.
+- The pad is then configured for 100 reports/s, 8 counts/mm, 1:1 scaling and
+  data reporting enabled. Anything that does not identify is driven as a plain
+  relative PS/2 mouse.
 
-If neither answers, the device is treated as a standard relative PS/2 mouse.
-All paths feed the same cursor, button state and click handling.
+All paths feed the same cursor, button state and click handling. If no byte ever
+arrives, `mouse_poll()` probes the device with `GETINFO` and retries
+initialisation at most twice; an idle pad answers the probe and is left alone, so
+silence by itself is not treated as a fault. The result appears as
+`ps/2 pointer:` in the System Info probe.
 
 The USB stack (`kernel/usb.c`) is a polled xHCI driver: no interrupts, root-port
 devices only (hubs are not enumerated), 32- or 64-byte device contexts, command

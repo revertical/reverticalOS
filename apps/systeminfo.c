@@ -9,6 +9,7 @@ extern u32 rv_rand(void);
 extern u32 rv_net_state(void);
 extern const char *rv_net_ip(void);
 extern int rv_wifi_connected(void);
+extern const char *rv_ps2_status(void);
 
 static void put_u32(const char *label, u32 value)
 {
@@ -48,6 +49,9 @@ int _start(void)
     rv_print("\n");
 
     put_u32("wifi joined: ", (u32)rv_wifi_connected());
+    rv_print("ps/2 pointer: ");
+    rv_print(rv_ps2_status());
+    rv_print("\n");
     put_u32("random: ", rv_rand());
 
     void *a = rv_alloc(16);

@@ -12,6 +12,9 @@ void mouse_init(int start_x, int start_y, int max_x, int max_y);
 void mouse_poll(void);
 void mouse_feed(u8 data);
 
+/* One-line PS/2 diagnostic ("Synaptics, 812 bytes") for the System Info probe. */
+const char *mouse_status(void);
+
 /* Input paths used by the USB HID driver.  Relative motion uses the same
    button bit layout as PS/2 (bit 0 left, bit 1 right, bit 2 middle). */
 void mouse_usb_relative(int dx, int dy, u8 buttons);

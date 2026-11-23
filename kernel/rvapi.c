@@ -8,6 +8,7 @@
 #include "net.h"
 #include "wifi.h"
 #include "timer.h"
+#include "mouse.h"
 #include "string.h"
 #include "serial.h"
 #include "panic.h"
@@ -85,6 +86,11 @@ int rv_wifi_connected(void)
     return wifi_connected();
 }
 
+const char *rv_ps2_status(void)
+{
+    return mouse_status();
+}
+
 static void rv_panic(const char *message)
 {
     panic(message && message[0] ? message : "module requested a panic");
@@ -98,6 +104,7 @@ static const RvApiSymbol api[] = {
     { "rv_net_state",     (uintptr_t)rv_net_state },
     { "rv_net_ip",        (uintptr_t)rv_net_ip },
     { "rv_wifi_connected",(uintptr_t)rv_wifi_connected },
+    { "rv_ps2_status",    (uintptr_t)rv_ps2_status },
     { "rv_panic",         (uintptr_t)rv_panic },
 };
 
