@@ -127,6 +127,7 @@ void kbd_feed(u8 sc)
     if (sc == 0x2A || sc == 0x36) { shift_down = 1; return; }
     if (sc == 0x3A) { caps_down = !caps_down; return; }
     if (sc == 0x1D) { ctrl_down = 1; return; }
+    if (sc == 0x3B) { push(KEY_F1); return; }
 
     char c = shift_down ? map_shift[sc] : map_normal[sc];
     if (!c) return;

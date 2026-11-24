@@ -13,6 +13,7 @@
 #define KEY_PGUP   0x107
 #define KEY_PGDN   0x108
 #define KEY_DEL    0x109
+#define KEY_F1     0x10A
 #define KEY_ESC    0x1B
 #define KEY_ENTER  '\n'
 #define KEY_BACK   '\b'

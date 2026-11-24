@@ -3997,6 +3997,11 @@ static int ui_keyboard(void)
             auth_key(c);
             continue;
         }
+        if (c == KEY_F1) {
+            start_open = !start_open;
+            start_sel = 0;
+            continue;
+        }
         if (start_open) {
             if (c == KEY_ESC) {
                 start_open = 0;
@@ -4079,10 +4084,34 @@ static int ui_keyboard(void)
     return changed;
 }
 
+/* The PS/2 diagnostics banner appears only while no valid motion packet has
+   been parsed, so a working pad never leaves it on screen.  It shows for 45 s,
+   which is how a machine with a dead touchpad can report its state without
+   being able to click System Info. */
+static int input_diag_visible(void)
+{
+    return screen_mode == SCREEN_DESKTOP &&
+           ui_now > 2500 && ui_now < 45000 &&
+           !mouse_has_motion();
+}
+
 static int ui_update(void)
 {
+    static int diag_was_visible;
+    static u32 diag_bytes, diag_packets;
+
     ui_now = timer_ms();
     int dirty = ui_keyboard();
+
+    int diag_now = input_diag_visible();
+    if (diag_now != diag_was_visible ||
+        mouse_byte_count() != diag_bytes ||
+        mouse_packet_count() != diag_packets) {
+        diag_was_visible = diag_now;
+        diag_bytes = mouse_byte_count();
+        diag_packets = mouse_packet_count();
+        dirty = 1;
+    }
 
     if (installer_installing()) {
         installer_poll();
@@ -4220,6 +4249,26 @@ static int ui_update(void)
 /* ------------------------------------------------------------------------- */
 /*  Frame                                                                     */
 /* ------------------------------------------------------------------------- */
+static void draw_input_diag(void)
+{
+    if (!input_diag_visible())
+        return;
+
+    int w = S(560);
+    int h = S(64);
+    int x = (screen_w - w) / 2;
+    int y = S(18);
+
+    gfx_shadow_round(x, y + S(3), w, h, S(14), S(10), 0x050B18, 70);
+    gfx_panel(x, y, w, h, S(14), C_PANEL, 244, 0xFFFFFF, 190);
+    gfx_fill_round(x + S(12), y + S(12), S(4), h - S(24), S(2),
+                   C_ACCENT, 240);
+    text_at(&g_font_ui15sb, x + S(26), y + S(25),
+            "PS/2 input diagnostics", C_INK, 245);
+    text_fit(&g_font_ui13, x + S(26), y + S(45), mouse_status(),
+             w - S(40), 0x4A5670, 235);
+}
+
 void ui_render(void)
 {
     if (screen_mode == SCREEN_LOGIN) {
@@ -4250,6 +4299,7 @@ void ui_render(void)
     draw_dock();
     draw_card();
     draw_toasts();
+    draw_input_diag();
     draw_cursor();
 }
 

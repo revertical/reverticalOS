@@ -493,20 +493,31 @@ deliberately conservative:
   desynchronise the byte stream.
 - The controller config enables the auxiliary and keyboard clocks and keeps the
   auxiliary IRQ off, because the driver polls the output buffer.
-- **Synaptics** (four `SETRES 0x00` commands, then `GETINFO` -> `0x47`) and
-  **Elan** (`F5`, three `E6`, `GETINFO` -> `3C 03 C8`) probes are for
-  identification only. Each probe is followed by another reset, and a Synaptics
-  pad is explicitly put back into mode 0 (relative reporting, 3-byte packets).
-  No vendor mode survives into normal operation.
-- The pad is then configured for 100 reports/s, 8 counts/mm, 1:1 scaling and
-  data reporting enabled. Anything that does not identify is driven as a plain
-  relative PS/2 mouse.
+- **No vendor knocks.** A relative cursor only needs the standard PS/2
+  protocol, and vendor probes are exactly how a pad ends up in a mode the
+  3-byte parser cannot read: the Elan knock (`F5`, `E6`, `E6`, `E6`, `E9`) is
+  also an ALPS "E6 report", and Synaptics/ALPS extended modes change the packet
+  format. `GETINFO` is only used as a liveness check, which changes no state.
+- The pad is then configured for 100 reports/s, 8 counts/mm, 1:1 scaling,
+  **stream mode** (`0xEA`) and data reporting enabled. `SETSTREAM` matters for
+  ALPS GlidePoint pads (the Dell Latitude E7250 uses one): without it they
+  accept every command but never report data.
+- Firmware is free to hand the pad over late or in a vendor state, so if the
+  reset is not acknowledged the driver still sends `F6`/`EA`/`F4`, and
+  `mouse_poll()` later probes with `GETINFO` and retries initialisation at most
+  twice. An idle pad answers the probe and is left alone, so silence by itself
+  is not treated as a fault.
 
-All paths feed the same cursor, button state and click handling. If no byte ever
-arrives, `mouse_poll()` probes the device with `GETINFO` and retries
-initialisation at most twice; an idle pad answers the probe and is left alone, so
-silence by itself is not treated as a fault. The result appears as
-`ps/2 pointer:` in the System Info probe.
+All paths feed the same cursor, button state and click handling.
+
+Because a laptop with a dead touchpad cannot click anything, the desktop shows
+a **PS/2 diagnostics banner** at the top of the screen for the first 45 seconds
+while no valid motion packet has been parsed. It reports the controller config
+byte, whether the reset was acknowledged, the bytes seen on the auxiliary port
+and the number of valid packets, for example `PS/2 cfg=47 reset=ok 812B 97P`.
+The same line appears as `ps/2 pointer:` in the System Info probe. `F1` toggles
+the Start menu from the keyboard, so every app (including System Info) is
+reachable without a pointer.
 
 The USB stack (`kernel/usb.c`) is a polled xHCI driver: no interrupts, root-port
 devices only (hubs are not enumerated), 32- or 64-byte device contexts, command

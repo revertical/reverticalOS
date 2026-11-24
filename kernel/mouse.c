@@ -16,6 +16,10 @@ static u8 buttons_prev;
 
 static const char *mouse_name = "none";
 static u32 aux_bytes;              /* total bytes seen on the aux port */
+static u32 packets;                /* valid 3-byte motion packets parsed */
+static u8 controller_cfg;          /* i8042 config byte read during init */
+static int cfg_valid;              /* controller_cfg was read successfully */
+static int reset_state;            /* 1 = device acknowledged 0xFF */
 static u64 init_ms;                /* when mouse_init() last ran */
 static int init_retries;
 static int probe_pending;          /* liveness check done, device answered */
@@ -171,47 +175,7 @@ static int mouse_reset(void)
     return 1;
 }
 
-/* Synaptics magic knock: four SETRES 0x00 commands, then GETINFO.  A real
-   Synaptics pad answers with 0x47 in the second identification byte. */
-static int synaptics_detect(void)
-{
-    u8 r[3];
-    for (int i = 0; i < 4; i++)
-        if (!mouse_cmd_arg(0xE8, 0x00))
-            return 0;
-    if (!mouse_getinfo(r))
-        return 0;
-    return r[1] == 0x47;
-}
-
-/* Synaptics mode byte, "sliced" through E6/E8 and committed with SETRATE
-   0x14.  Mode 0 is relative reporting with 3-byte packets, which is the only
-   format process_packet() understands. */
-static void synaptics_relative(void)
-{
-    if (!mouse_cmd(0xE6))
-        return;
-    for (int shift = 6; shift >= 0; shift -= 2)
-        if (!mouse_cmd_arg(0xE8, 0x00))
-            return;
-    mouse_cmd_arg(0xF3, 0x14);
-}
-
-/* Elantech magic knock: disable, three SETSCALE11 commands, GETINFO.
-   A real Elantech pad answers 3C 03 C8 (or 3C 03 00). */
-static int elantech_detect(void)
-{
-    u8 r[3];
-    if (!mouse_cmd(0xF5))
-        return 0;
-    for (int i = 0; i < 3; i++)
-        if (!mouse_cmd(0xE6))
-            return 0;
-    if (!mouse_getinfo(r))
-        return 0;
-    return r[0] == 0x3C && r[1] == 0x03 &&
-           (r[2] == 0xC8 || r[2] == 0x00);
-}
+/* No vendor knocks here; see mouse_init(). */
 
 void mouse_init(int start_x, int start_y, int mx, int my)
 {
@@ -232,8 +196,10 @@ void mouse_init(int start_x, int start_y, int mx, int my)
 
     /* Controller config: aux and keyboard clocks on; the auxiliary IRQ stays
        off because this driver polls the output buffer. */
-    u8 cfg;
+    u8 cfg = 0;
     if (ps2_cmd(0x20) && ps2_read_controller(&cfg, 50)) {
+        controller_cfg = cfg;
+        cfg_valid = 1;
         cfg &= (u8)~0x20;
         cfg &= (u8)~0x10;
         cfg &= (u8)~0x02;
@@ -242,15 +208,20 @@ void mouse_init(int start_x, int start_y, int mx, int my)
     }
     timer_delay_ms(20);
 
-    int reset_ok = mouse_reset();
-    if (!reset_ok) {
+    /* No vendor knocks: a relative cursor only needs the standard PS/2
+       protocol, and vendor probes are how a pad ends up in a mode the 3-byte
+       parser cannot read (the Elan knock F5,E6,E6,E6,E9 is also an ALPS "E6
+       report", and Synaptics/ALPS extended modes change the packet format).
+       A real reset puts the device in plain 3-byte relative mode; GETINFO is
+       only used later as a liveness check and changes no state. */
+    reset_state = mouse_reset();
+    if (!reset_state) {
         /* A pad that does not acknowledge a reset is not going to answer the
-           rest either.  Try the two harmless commands anyway, then let the
+           rest either.  Try the harmless commands anyway, then let the
            liveness retry in mouse_poll() attempt a full init later. */
         serial_write("mouse: reset not acknowledged\r\n");
         mouse_cmd(0xF6);
-        drain();
-        packet_index = 0;
+        mouse_cmd(0xEA);            /* stream mode: ALPS needs this */
         mouse_cmd(0xF4);
         drain();
         packet_index = 0;
@@ -258,34 +229,17 @@ void mouse_init(int start_x, int start_y, int mx, int my)
         return;
     }
 
-    /* Identify the pad for the log only.  Every probe is followed by a reset
-       so the device is back in plain relative PS/2 mode afterwards: a vendor
-       probe must never be what leaves the touchpad unreadable. */
-    int synaptics = synaptics_detect();
-    mouse_reset();
-    int elantech = 0;
-    if (!synaptics) {
-        elantech = elantech_detect();
-        mouse_reset();
-    }
-
-    if (synaptics) {
-        mouse_name = "Synaptics";
-        serial_write("mouse: Synaptics touchpad\r\n");
-        synaptics_relative();
-    } else if (elantech) {
-        mouse_name = "Elan";
-        serial_write("mouse: Elan touchpad\r\n");
-    } else {
-        mouse_name = "generic PS/2";
-        serial_write("mouse: generic PS/2 mouse\r\n");
-    }
+    mouse_name = "PS/2";
+    serial_write("mouse: generic PS/2 mouse\r\n");
 
     /* Standard PS/2 mouse setup: 100 reports/s, 8 counts/mm, 1:1 scaling,
-       streaming mode, data reporting enabled. */
+       stream mode, data reporting enabled.  SETSTREAM matters for ALPS:
+       without it the pad accepts the commands but never reports. */
     mouse_cmd_arg(0xF3, 0x64);
     mouse_cmd_arg(0xE8, 0x03);
     mouse_cmd(0xE6);
+    if (!mouse_cmd(0xEA))
+        serial_write("mouse: stream mode not acknowledged\r\n");
     drain();
     packet_index = 0;
     if (!mouse_cmd(0xF4))
@@ -296,19 +250,18 @@ void mouse_init(int start_x, int start_y, int mx, int my)
     serial_write("mouse: PS/2 ready\r\n");
 }
 
-/* One-line state for the System Info probe, so a machine without a serial
-   port can still report what the controller and the pad did. */
-const char *mouse_status(void)
+/* One-line state for the System Info probe and the on-screen diagnostics, so
+   a machine without a serial port can still report what the controller and
+   the pad did. */
+static int put_text(char *out, int n, const char *s)
 {
-    static char text[64];
-    int n = 0;
+    while (*s && n < 63)
+        out[n++] = *s++;
+    return n;
+}
 
-    for (const char *p = mouse_name; *p && n < 22; p++)
-        text[n++] = *p;
-    text[n++] = ',';
-    text[n++] = ' ';
-
-    u32 value = aux_bytes;
+static int put_u32(char *out, int n, u32 value)
+{
     char digits[10];
     int d = 0;
     if (value == 0)
@@ -317,12 +270,53 @@ const char *mouse_status(void)
         digits[d++] = (char)('0' + value % 10u);
         value /= 10u;
     }
-    while (d != 0 && n < 60)
-        text[n++] = digits[--d];
-    for (const char *p = " bytes"; *p && n < 62; p++)
-        text[n++] = *p;
+    while (d != 0 && n < 63)
+        out[n++] = digits[--d];
+    return n;
+}
+
+static int put_hex8(char *out, int n, u8 value)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    if (n < 62) out[n++] = hex[value >> 4];
+    if (n < 62) out[n++] = hex[value & 0x0F];
+    return n;
+}
+
+const char *mouse_status(void)
+{
+    static char text[64];
+    int n = 0;
+
+    n = put_text(text, n, mouse_name);
+    n = put_text(text, n, " cfg=");
+    if (cfg_valid)
+        n = put_hex8(text, n, controller_cfg);
+    else
+        n = put_text(text, n, "??");
+    n = put_text(text, n, reset_state ? " reset=ok" : " reset=FAIL");
+    n = put_text(text, n, " ");
+    n = put_u32(text, n, aux_bytes);
+    n = put_text(text, n, "B ");
+    n = put_u32(text, n, packets);
+    n = put_text(text, n, "P");
     text[n] = 0;
     return text;
+}
+
+int mouse_has_motion(void)
+{
+    return packets != 0;
+}
+
+u32 mouse_byte_count(void)
+{
+    return aux_bytes;
+}
+
+u32 mouse_packet_count(void)
+{
+    return packets;
 }
 
 static void process_packet(void)
@@ -337,6 +331,7 @@ static void process_packet(void)
         motion_logged = 1;
         serial_write("mouse: first motion packet\r\n");
     }
+    packets++;
 
     int dx = packet[1];
     int dy = packet[2];
